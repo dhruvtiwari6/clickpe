@@ -1,0 +1,36 @@
+{
+  "name": "B - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "err-trigger-b",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE match_runs SET status='failed', finished_at=now(), summary = jsonb_build_object('error', $1) WHERE status='running' AND started_at > now() - interval '1 hour';",
+        "options": {
+          "queryReplacement": "={{ $json.execution?.error?.message || 'unknown error' }}"
+        }
+      },
+      "id": "mark-failed-b",
+      "name": "Mark Run Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [500, 300],
+      "notes": "Attach the 'Postgres - LoanDB' credential in the n8n UI after import."
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [[{ "node": "Mark Run Failed", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {}
+}
+

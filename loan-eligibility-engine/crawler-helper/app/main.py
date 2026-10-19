@@ -8,8 +8,9 @@ import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 
+from . import match as MB
 from . import normalize as N
-from .models import NormReq, ParseReq, RenderReq, RobotsReq
+from .models import LlmApplyReq, NormReq, ParseReq, RenderReq, RobotsReq, RulesReq
 
 UA = os.getenv("USER_AGENT", "LoanDiscoveryBot/1.0")
 app = FastAPI(title="crawler-helper")
@@ -120,3 +121,16 @@ def normalize(req: NormReq):
         "gate_passed": gate_ok,
         "gate_reason": gate_reason,
     }
+
+
+# ---------- /match/rules & /match/apply ----------
+@app.post("/match/rules")
+def match_rules(req: RulesReq):
+    return MB.classify_many(req.pairs)
+
+
+@app.post("/match/apply")
+def match_apply(req: LlmApplyReq):
+    if req.verdicts is None:
+        return {"llm_matches": MB.conservative_fallback(req.ambiguous)}
+    return {"llm_matches": MB.apply_llm_verdicts(req.ambiguous, req.verdicts)}

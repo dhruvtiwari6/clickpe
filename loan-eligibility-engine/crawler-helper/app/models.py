@@ -27,3 +27,12 @@ class NormReq(BaseModel):
     page_text: str | None = None                 # required for grounding when method == 'llm'
     prev_active_count: int = 0
     min_ratio: float = 0.5
+
+
+class RulesReq(BaseModel):
+    pairs: list[dict]
+
+
+class LlmApplyReq(BaseModel):
+    ambiguous: list[dict]
+    verdicts: dict | None = None                 # None => offline fallback
