@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${PG_USER:-loan}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-loanpass}
+      POSTGRES_DB: ${PG_DB:-loanengine}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d:ro       # runs *.sql on first boot, in filename order
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-loan} -d ${PG_DB:-loanengine}"]
+      interval: 5s
+      retries: 10
+
+  crawler-helper:
+    build: ./crawler-helper
+    environment:
+      USER_AGENT: "LoanDiscoveryBot/1.0 (+mailto:${CONTACT_EMAIL:-you@example.com})"
+    ports:
+      - "8000:8000"                                 # debug only
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 10
+
+  mock-sites:
+    image: nginx:alpine
+    volumes:
+      - ./mock-sites:/usr/share/nginx/html:ro
+    ports:
+      - "8081:80"
+
+  n8n:
+    image: n8nio/n8n:1.64.0
+    ports:
+      - "5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - N8N_RUNNERS_ENABLED=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+      crawler-helper:
+        condition: service_healthy
+
+volumes:
+  pgdata: {}
+  n8n_data: {}

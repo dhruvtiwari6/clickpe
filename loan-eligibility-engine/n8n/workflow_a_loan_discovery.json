@@ -1,0 +1,295 @@
+{
+  "name": "A - Loan Product Discovery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 2 * * *" } ] }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 02:00 IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-520, 200]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run Now (demo)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-520, 420]
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "a1", "name": "force_refresh", "value": "={{ $node.name === 'Run Now (demo)' ? true : false }}", "type": "boolean" },
+          { "id": "a2", "name": "trigger_type", "value": "={{ $node.name === 'Run Now (demo)' ? 'manual' : 'schedule' }}", "type": "string" }
+        ] },
+        "options": {}
+      },
+      "id": "set-trigger-context",
+      "name": "Set Trigger Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-280, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO crawl_runs(trigger_type) VALUES ($1) RETURNING run_id, started_at;",
+        "options": { "queryReplacement": "={{ $json.trigger_type }}" }
+      },
+      "id": "start-run",
+      "name": "Start Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-60, 300],
+      "notes": "Attach 'Postgres - LoanDB' credential."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT s.*, (SELECT count(*) FROM loan_products p WHERE p.source_id = s.source_id AND p.is_active) AS prev_active_count FROM crawl_sources s WHERE s.is_active ORDER BY s.source_id;",
+        "options": {}
+      },
+      "id": "load-sources",
+      "name": "Load Active Sources",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [160, 300],
+      "notes": "Attach 'Postgres - LoanDB' credential."
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "id": "loop-sources",
+      "name": "Per Source",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [380, 300]
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "p1", "name": "run_id", "value": "={{ $('Start Run').item.json.run_id }}", "type": "number" },
+          { "id": "p2", "name": "started_at", "value": "={{ $('Start Run').item.json.started_at }}", "type": "string" },
+          { "id": "p3", "name": "force_refresh", "value": "={{ $('Set Trigger Context').item.json.force_refresh }}", "type": "boolean" },
+          { "id": "p4", "name": "t0", "value": "={{ Date.now() }}", "type": "number" }
+        ] },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "prep-context",
+      "name": "Prep Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crawler-helper:8000/robots",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"url\": $json.listing_url } }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "robots-check",
+      "name": "Robots Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [820, 420]
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "version": 2 }, "combinator": "and",
+          "conditions": [ { "leftValue": "={{ $json.allowed }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } } ] }
+      },
+      "id": "allowed-if",
+      "name": "Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1040, 420]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Prep Context').item.json.listing_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "User-Agent", "value": "LoanDiscoveryBot/1.0 (+mailto:you@example.com)" } ] },
+        "options": { "timeout": 30000, "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "fetch-static",
+      "name": "Fetch Static Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1260, 420],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "h1", "name": "html", "value": "={{ $json.data }}", "type": "string" }
+        ] },
+        "options": {}
+      },
+      "id": "normalize-fetch",
+      "name": "Normalize Fetch Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1480, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crawler-helper:8000/parse",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"html\": $json.html, \"base_url\": $('Prep Context').item.json.listing_url, \"selector_config\": $('Prep Context').item.json.selector_config } }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "parse-page",
+      "name": "Parse Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 420],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "version": 2 }, "combinator": "or",
+          "conditions": [
+            { "leftValue": "={{ $json.fingerprint }}", "rightValue": "={{ $('Prep Context').item.json.last_content_hash }}", "operator": { "type": "string", "operation": "notEquals" } },
+            { "leftValue": "={{ $('Prep Context').item.json.force_refresh }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ] }
+      },
+      "id": "changed-if",
+      "name": "Changed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1920, 420]
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "version": 2 }, "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ $json.candidate_count }}", "rightValue": "={{ $('Prep Context').item.json.expected_min_products }}", "operator": { "type": "number", "operation": "gte" } },
+            { "leftValue": "={{ $('Prep Context').item.json.extraction_mode }}", "rightValue": "llm", "operator": { "type": "string", "operation": "notEquals" } }
+          ] }
+      },
+      "id": "enough-if",
+      "name": "Enough Candidates?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2140, 420]
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "s1", "name": "candidates", "value": "={{ $('Parse Page').item.json.candidates }}", "type": "array" },
+          { "id": "s2", "name": "method", "value": "selectors", "type": "string" }
+        ] },
+        "options": {}
+      },
+      "id": "use-selectors",
+      "name": "Use Selector Candidates",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2360, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crawler-helper:8000/normalize",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"source_id\": $('Prep Context').item.json.source_id, \"source_url\": $('Prep Context').item.json.listing_url, \"method\": $json.method, \"candidates\": $json.candidates, \"page_text\": ($json.method === 'llm' ? $('Parse Page').item.json.clean_text : null), \"prev_active_count\": $('Prep Context').item.json.prev_active_count } }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "normalize-validate",
+      "name": "Normalize & Validate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2580, 420]
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "version": 2 }, "combinator": "and",
+          "conditions": [ { "leftValue": "={{ $json.gate_passed }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } } ] }
+      },
+      "id": "gate-if",
+      "name": "Gate Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2800, 420]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH incoming AS (SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(source_id int, product_key text, lender_name text, product_name text, interest_rate_min numeric, interest_rate_max numeric, min_loan_amount numeric, max_loan_amount numeric, min_tenure_months int, max_tenure_months int, min_monthly_income numeric, min_credit_score int, max_credit_score int, min_age int, max_age int, employment_types text[], processing_fee_text text, eligibility_text text, source_url text, extraction_method text, confidence numeric, content_hash text, raw_extract jsonb)), up AS (INSERT INTO loan_products (source_id, product_key, lender_name, product_name, interest_rate_min, interest_rate_max, min_loan_amount, max_loan_amount, min_tenure_months, max_tenure_months, min_monthly_income, min_credit_score, max_credit_score, min_age, max_age, employment_types, processing_fee_text, eligibility_text, source_url, extraction_method, confidence, content_hash, raw_extract) SELECT * FROM incoming ON CONFLICT (source_id, product_key) DO UPDATE SET lender_name = EXCLUDED.lender_name, product_name = EXCLUDED.product_name, interest_rate_min = EXCLUDED.interest_rate_min, interest_rate_max = EXCLUDED.interest_rate_max, min_loan_amount = EXCLUDED.min_loan_amount, max_loan_amount = EXCLUDED.max_loan_amount, min_tenure_months = EXCLUDED.min_tenure_months, max_tenure_months = EXCLUDED.max_tenure_months, min_monthly_income = EXCLUDED.min_monthly_income, min_credit_score = EXCLUDED.min_credit_score, max_credit_score = EXCLUDED.max_credit_score, min_age = EXCLUDED.min_age, max_age = EXCLUDED.max_age, employment_types = EXCLUDED.employment_types, processing_fee_text = EXCLUDED.processing_fee_text, eligibility_text = EXCLUDED.eligibility_text, source_url = EXCLUDED.source_url, extraction_method = EXCLUDED.extraction_method, confidence = EXCLUDED.confidence, raw_extract = EXCLUDED.raw_extract, is_active = TRUE, last_seen_at = now(), last_changed_at = CASE WHEN loan_products.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN now() ELSE loan_products.last_changed_at END, content_hash = EXCLUDED.content_hash RETURNING (xmax = 0) AS inserted) SELECT count(*) FILTER (WHERE inserted) AS inserted, count(*) FILTER (WHERE NOT inserted) AS updated FROM up;",
+        "options": { "queryReplacement": "={{ JSON.stringify($json.valid) }}" }
+      },
+      "id": "upsert-products",
+      "name": "Upsert Products",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3020, 420],
+      "onError": "continueErrorOutput",
+      "notes": "Attach 'Postgres - LoanDB' credential."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH d AS (UPDATE loan_products SET is_active = FALSE WHERE source_id = $1 AND is_active AND last_seen_at < $2::timestamptz RETURNING product_id) SELECT count(*) AS deactivated FROM d;",
+        "options": { "queryReplacement": "={{ $('Prep Context').item.json.source_id }},{{ $('Prep Context').item.json.started_at }}" }
+      },
+      "id": "deactivate-stale",
+      "name": "Deactivate Stale",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3240, 420],
+      "notes": "Attach 'Postgres - LoanDB' credential."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE crawl_runs r SET finished_at = now(), sources_total = s.total, sources_ok = s.ok, sources_failed = s.failed, sources_unchanged = s.unchanged, products_inserted = s.ins, products_updated = s.upd, products_deactivated = s.deact, status = CASE WHEN s.failed = 0 THEN 'success' WHEN s.ok + s.unchanged = 0 THEN 'failed' ELSE 'partial' END FROM (SELECT count(*) AS total, count(*) FILTER (WHERE status = 'ok') AS ok, count(*) FILTER (WHERE status = 'unchanged') AS unchanged, count(*) FILTER (WHERE status NOT IN ('ok','unchanged')) AS failed, coalesce(sum(inserted),0) AS ins, coalesce(sum(updated),0) AS upd, coalesce(sum(deactivated),0) AS deact FROM crawl_source_log WHERE run_id = $1) s WHERE r.run_id = $1 RETURNING r.*;",
+        "options": { "queryReplacement": "={{ $('Start Run').item.json.run_id }}" }
+      },
+      "id": "finish-run",
+      "name": "Finish Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [600, 160],
+      "notes": "Attach 'Postgres - LoanDB' credential. Wire the loop 'done' output here."
+    }
+  ],
+  "connections": {
+    "Daily 02:00 IST": { "main": [[{ "node": "Set Trigger Context", "type": "main", "index": 0 }]] },
+    "Run Now (demo)": { "main": [[{ "node": "Set Trigger Context", "type": "main", "index": 0 }]] },
+    "Set Trigger Context": { "main": [[{ "node": "Start Run", "type": "main", "index": 0 }]] },
+    "Start Run": { "main": [[{ "node": "Load Active Sources", "type": "main", "index": 0 }]] },
+    "Load Active Sources": { "main": [[{ "node": "Per Source", "type": "main", "index": 0 }]] },
+    "Per Source": { "main": [
+      [{ "node": "Finish Run", "type": "main", "index": 0 }],
+      [{ "node": "Prep Context", "type": "main", "index": 0 }]
+    ] },
+    "Prep Context": { "main": [[{ "node": "Robots Check", "type": "main", "index": 0 }]] },
+    "Robots Check": { "main": [[{ "node": "Allowed?", "type": "main", "index": 0 }]] },
+    "Allowed?": { "main": [[{ "node": "Fetch Static Page", "type": "main", "index": 0 }], []] },
+    "Fetch Static Page": { "main": [[{ "node": "Normalize Fetch Output", "type": "main", "index": 0 }], []] },
+    "Normalize Fetch Output": { "main": [[{ "node": "Parse Page", "type": "main", "index": 0 }]] },
+    "Parse Page": { "main": [[{ "node": "Changed?", "type": "main", "index": 0 }], []] },
+    "Changed?": { "main": [[{ "node": "Enough Candidates?", "type": "main", "index": 0 }], []] },
+    "Enough Candidates?": { "main": [[{ "node": "Use Selector Candidates", "type": "main", "index": 0 }], []] },
+    "Use Selector Candidates": { "main": [[{ "node": "Normalize & Validate", "type": "main", "index": 0 }]] },
+    "Normalize & Validate": { "main": [[{ "node": "Gate Passed?", "type": "main", "index": 0 }]] },
+    "Gate Passed?": { "main": [[{ "node": "Upsert Products", "type": "main", "index": 0 }], []] },
+    "Upsert Products": { "main": [[{ "node": "Deactivate Stale", "type": "main", "index": 0 }], []] },
+    "Deactivate Stale": { "main": [[{ "node": "Per Source", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionTimeout": 900 },
+  "pinData": {}
+}
