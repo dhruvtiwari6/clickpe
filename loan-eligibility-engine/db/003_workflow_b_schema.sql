@@ -1,6 +1,7 @@
 -- ---------- users (populated by the ingestion step; demo seed in 004) ----------
 CREATE TABLE IF NOT EXISTS users (
   user_id            TEXT PRIMARY KEY,           -- natural key from the CSV
+  name               TEXT,                        -- display name from the CSV (used by Workflow C)
   email              TEXT NOT NULL,
   monthly_income     NUMERIC(12,2),
   credit_score       INT,

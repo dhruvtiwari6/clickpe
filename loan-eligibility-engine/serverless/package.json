@@ -1,0 +1,16 @@
+{
+  "name": "loan-eligibility-engine-serverless",
+  "version": "1.0.0",
+  "description": "AWS cloud architecture (IaC) for the Loan Eligibility Engine. Deploy-ready, undeployed by default.",
+  "private": true,
+  "devDependencies": {
+    "serverless": "^3.38.0",
+    "serverless-python-requirements": "^6.1.1"
+  },
+  "scripts": {
+    "sync-ingest": "cp ../crawler-helper/app/ingest.py src/shared/ingest.py",
+    "validate": "serverless print",
+    "package": "serverless package",
+    "deploy": "serverless deploy"
+  }
+}

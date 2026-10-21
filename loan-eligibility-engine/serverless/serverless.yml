@@ -1,0 +1,159 @@
+# =============================================================================
+# Loan Eligibility Engine -- AWS cloud architecture (Serverless Framework v3)
+#
+# This is the CLOUD version of the pipeline that runs locally via Docker Compose.
+# It is DEPLOY-READY but intentionally UNDEPLOYED: the assignment accepts local
+# deployment and does not require incurring cloud cost. `serverless package`
+# synthesizes the CloudFormation template locally without an AWS account; only
+# `serverless deploy` would touch AWS.
+#
+# Pipeline:
+#   UI --(GET /upload-url)--> uploadUrl Lambda --> presigned S3 PUT URL
+#   UI --(PUT bytes)--------> S3 bucket (uploads/*.csv)
+#   S3 ObjectCreated event -> ingest Lambda --> normalize --> RDS Postgres
+#                                            -> POST {batch_id} to n8n /webhook/match
+#   n8n Workflow B (matching) --> Workflow C (SES email via this stack's SES identity)
+#
+# Normalization logic (src/shared/ingest.py) is identical to the local FastAPI
+# helper -- one source of truth. See src/shared/README.md.
+# =============================================================================
+service: loan-eligibility-engine
+
+frameworkVersion: '3'
+
+plugins:
+  - serverless-python-requirements
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'ap-south-1'}          # Mumbai; override with --region
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 30
+  environment:
+    UPLOAD_BUCKET: ${self:custom.bucketName}
+    UPLOAD_PREFIX: 'uploads/'
+    PRESIGN_TTL_SECONDS: '300'
+    # DB connection string for RDS Postgres. When provisionRds=true this is
+    # overridden (below) with the created instance's endpoint; otherwise supply
+    # your own via the DB_DSN env var at deploy time.
+    DB_DSN: ${env:DB_DSN, ''}
+    # n8n matching webhook the ingest Lambda calls after storing a batch.
+    N8N_MATCH_WEBHOOK: ${env:N8N_MATCH_WEBHOOK, ''}
+    SES_SENDER: ${env:SES_SENDER, ''}
+  iam:
+    role:
+      statements:
+        # Read uploaded CSVs; presign PUTs.
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+          Resource: !Sub 'arn:aws:s3:::${self:custom.bucketName}/*'
+        # Workflow C sends email through SES (restrict to the verified sender in prod).
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: '*'
+
+custom:
+  bucketName: ${self:service}-${self:provider.stage}-uploads
+  # Toggle managed RDS. Default false = cost-free package/deploy; you bring a DSN.
+  provisionRds: ${env:PROVISION_RDS, 'false'}
+  pythonRequirements:
+    dockerizePip: true                          # build psycopg binary wheel for Lambda
+    slim: true
+    layer: false
+
+package:
+  individually: true
+  patterns:
+    - '!**'
+    - 'src/**'
+
+functions:
+  # ---- presigned-URL issuer (API Gateway HTTP API) ----
+  uploadUrl:
+    handler: src/upload_url_handler.handler
+    description: Returns a short-lived presigned S3 PUT URL for the browser.
+    timeout: 15
+    events:
+      - httpApi:
+          path: /upload-url
+          method: get
+      - httpApi:
+          path: /upload-url
+          method: options
+
+  # ---- S3-event ingest (parse + normalize + store + trigger matching) ----
+  ingest:
+    handler: src/ingest_handler.handler
+    description: On CSV upload, normalize rows into RDS and trigger n8n matching.
+    timeout: 120                                 # large CSVs; still well under limits
+    memorySize: 512
+    events:
+      - s3:
+          bucket: ${self:custom.bucketName}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: uploads/
+            - suffix: .csv
+          existing: false
+
+resources:
+  Conditions:
+    # Only create RDS + its network when PROVISION_RDS=true at deploy time.
+    CreateRds: !Equals ['${self:custom.provisionRds}', 'true']
+
+  Resources:
+    # ---- SES: a verified sender identity for Workflow C notifications ----
+    # Email identities require click-through verification after creation.
+    SesSenderIdentity:
+      Type: AWS::SES::EmailIdentity
+      Condition: CreateRds           # gated with RDS so a bare package stays minimal
+      Properties:
+        EmailIdentity: ${env:SES_SENDER, 'you+sender@example.com'}
+
+    # ---- RDS for PostgreSQL (optional, cost-aware) ----
+    UsersDbSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Condition: CreateRds
+      Properties:
+        GroupDescription: Access to the loan-engine Postgres instance
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            CidrIp: ${env:DB_INGRESS_CIDR, '10.0.0.0/16'}
+
+    UsersDb:
+      Type: AWS::RDS::DBInstance
+      Condition: CreateRds
+      DeletionPolicy: Delete
+      Properties:
+        DBInstanceIdentifier: ${self:service}-${self:provider.stage}-pg
+        Engine: postgres
+        EngineVersion: '16'
+        DBInstanceClass: db.t4g.micro            # smallest / free-tier-eligible class
+        AllocatedStorage: '20'
+        DBName: loanengine
+        MasterUsername: ${env:DB_USER, 'loan'}
+        MasterUserPassword: ${env:DB_PASSWORD, 'change-me-please'}
+        PubliclyAccessible: false
+        VPCSecurityGroups:
+          - !Ref UsersDbSecurityGroup
+        BackupRetentionPeriod: 0                 # no backups for a demo instance
+
+  Outputs:
+    UploadBucketName:
+      Description: S3 bucket that receives user CSV uploads
+      Value: ${self:custom.bucketName}
+    UploadUrlEndpoint:
+      Description: GET this (with ?filename=) to obtain a presigned PUT URL
+      Value: !Sub 'https://${HttpApi}.execute-api.${self:provider.region}.amazonaws.com/upload-url'
+    RdsEndpoint:
+      Condition: CreateRds
+      Description: RDS Postgres endpoint (set DB_DSN from this)
+      Value: !GetAtt UsersDb.Endpoint.Address

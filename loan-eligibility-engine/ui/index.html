@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Loan Eligibility Engine — User CSV Upload</title>
+  <style>
+    :root { --fg:#1a1a2e; --muted:#6b7280; --accent:#4f46e5; --ok:#047857; --bad:#b91c1c; --border:#e5e7eb; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           margin: 0; background: #f6f7fb; color: var(--fg); }
+    main { max-width: 640px; margin: 48px auto; padding: 0 20px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    p.sub { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 12px;
+            padding: 24px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    label { display:block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+    input[type=url] { width: 100%; padding: 10px 12px; border:1px solid var(--border);
+                      border-radius: 8px; font-size: 14px; margin-bottom: 18px; }
+    .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 32px;
+            text-align: center; cursor: pointer; transition: .15s; color: var(--muted); }
+    .drop.hover { border-color: var(--accent); background: #eef2ff; color: var(--accent); }
+    .drop strong { color: var(--fg); }
+    #fileName { margin: 14px 0 0; font-size: 14px; font-weight: 600; }
+    button { margin-top: 20px; width: 100%; padding: 12px; font-size: 15px; font-weight: 600;
+             color:#fff; background: var(--accent); border:none; border-radius: 8px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #result { margin-top: 20px; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+    #result.ok { color: var(--ok); }
+    #result.bad { color: var(--bad); }
+    pre { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:8px; overflow:auto;
+          font-size:12.5px; margin-top:10px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Loan Eligibility Engine</h1>
+    <p class="sub">Upload a user CSV to start the pipeline: parse &amp; normalize &rarr; store &rarr; trigger matching (Workflow B).</p>
+
+    <div class="card">
+      <label for="endpoint">Ingestion webhook URL</label>
+      <input id="endpoint" type="url" value="http://localhost:5678/webhook/ingest" />
+      <p class="hint">Default is the self-hosted n8n webhook. Use <code>/webhook-test/ingest</code> while testing an un-activated workflow.</p>
+
+      <label>CSV file</label>
+      <div id="drop" class="drop">
+        <strong>Click to choose</strong> or drag a <code>.csv</code> here
+        <div id="fileName"></div>
+      </div>
+      <input id="file" type="file" accept=".csv,text/csv" hidden />
+
+      <button id="submit" disabled>Upload &amp; Start Pipeline</button>
+      <div id="result"></div>
+    </div>
+  </main>
+
+  <script>
+    const drop = document.getElementById('drop');
+    const fileInput = document.getElementById('file');
+    const fileName = document.getElementById('fileName');
+    const submit = document.getElementById('submit');
+    const result = document.getElementById('result');
+    const endpoint = document.getElementById('endpoint');
+    let chosen = null;
+
+    function setFile(f) {
+      if (!f) return;
+      if (!/\.csv$/i.test(f.name) && f.type !== 'text/csv') {
+        showResult('bad', 'Please choose a .csv file.');
+        return;
+      }
+      chosen = f;
+      fileName.textContent = f.name + '  (' + (f.size / 1024).toFixed(1) + ' KB)';
+      submit.disabled = false;
+      result.textContent = '';
+      result.className = '';
+    }
+
+    function showResult(kind, text, obj) {
+      result.className = kind;
+      result.textContent = text + (obj ? '\n' : '');
+      if (obj) {
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(obj, null, 2);
+        result.appendChild(pre);
+      }
+    }
+
+    drop.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+    ['dragenter', 'dragover'].forEach(e =>
+      drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('hover'); }));
+    ['dragleave', 'drop'].forEach(e =>
+      drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('hover'); }));
+    drop.addEventListener('drop', ev => setFile(ev.dataTransfer.files[0]));
+
+    submit.addEventListener('click', async () => {
+      if (!chosen) return;
+      submit.disabled = true;
+      showResult('', 'Uploading ' + chosen.name + ' \u2026');
+
+      const fd = new FormData();
+      fd.append('file', chosen, chosen.name);  // field name must be 'file' (matches webhook)
+
+      try {
+        const res = await fetch(endpoint.value.trim(), { method: 'POST', body: fd });
+        let body;
+        const text = await res.text();
+        try { body = JSON.parse(text); } catch { body = { raw: text }; }
+
+        if (res.ok) {
+          showResult('ok',
+            '\u2713 Pipeline started. Stored ' +
+            (body.inserted ?? '?') + ' new / ' + (body.updated ?? '?') + ' updated user(s).',
+            body);
+        } else {
+          showResult('bad', '\u2717 Upload rejected (HTTP ' + res.status + ').', body);
+        }
+      } catch (err) {
+        showResult('bad',
+          '\u2717 Request failed: ' + err.message +
+          '\nIf this is a CORS/connection error, confirm n8n is running and the webhook is active.');
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

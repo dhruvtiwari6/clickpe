@@ -36,3 +36,13 @@ class RulesReq(BaseModel):
 class LlmApplyReq(BaseModel):
     ambiguous: list[dict]
     verdicts: dict | None = None                 # None => offline fallback
+
+
+class IngestReq(BaseModel):
+    """Stateless CSV ingestion. Accepts the raw CSV text (n8n reads the uploaded
+    file and sends its contents). The helper parses + normalizes rows; n8n owns
+    the DB write. A batch_id may be supplied for idempotent re-runs; otherwise
+    the helper generates one."""
+    csv_text: str
+    batch_id: str | None = None
+    filename: str | None = None

@@ -1,0 +1,30 @@
+{
+  "name": "C - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "err-trigger-c",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Surface notification failures in the execution log. We do NOT mark matches\n// notified on failure, so the next run will retry those users safely.\nconst msg = $json.execution?.error?.message || 'unknown notification error';\nconst wf = $json.workflow?.name || 'C - User Notification';\nconsole.log(`[notify-error] workflow='${wf}' message='${msg}'`);\nreturn [{ json: { workflow: wf, error: msg } }];"
+      },
+      "id": "log-notify-error",
+      "name": "Log Notify Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [[{ "node": "Log Notify Error", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {}
+}

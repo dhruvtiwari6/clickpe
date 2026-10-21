@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${PG_PASSWORD:-loanpass}
       POSTGRES_DB: ${PG_DB:-loanengine}
     ports:
-      - "5432:5432"
+      - "5433 curl -s http://localhost:8000/health   :5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db:/docker-entrypoint-initdb.d:ro       # runs *.sql on first boot, in filename order
@@ -20,7 +20,7 @@ services:
     environment:
       USER_AGENT: "LoanDiscoveryBot/1.0 (+mailto:${CONTACT_EMAIL:-you@example.com})"
     ports:
-      - "8000:8000"                                 # debug only
+      - "8001:8000"                                 # debug only (host 8000 was in use)
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -31,7 +31,7 @@ services:
     volumes:
       - ./mock-sites:/usr/share/nginx/html:ro
     ports:
-      - "8081:80"
+      - "8082:80"                                   # host 8081 was in use
 
   n8n:
     image: n8nio/n8n:1.64.0

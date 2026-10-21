@@ -1,0 +1,30 @@
+{
+  "name": "Ingest - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "err-trigger-ingest",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ingestion is stateless (no run table of its own). Surface the error in the\n// execution log so a failed upload is visible without writing to the DB.\nconst msg = $json.execution?.error?.message || 'unknown ingestion error';\nconst wf = $json.workflow?.name || 'Ingest - User CSV Upload';\nconsole.log(`[ingest-error] workflow='${wf}' message='${msg}'`);\nreturn [{ json: { workflow: wf, error: msg } }];"
+      },
+      "id": "log-ingest-error",
+      "name": "Log Ingest Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [[{ "node": "Log Ingest Error", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {}
+}

@@ -1,0 +1,231 @@
+{
+  "name": "Ingest - User CSV Upload",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest",
+        "responseMode": "responseNode",
+        "options": {
+          "binaryPropertyName": "file"
+        }
+      },
+      "id": "webhook-ingest",
+      "name": "Webhook Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "webhookId": "webhook-ingest",
+      "notes": "Receives multipart/form-data with a single CSV file field named 'file' from the upload UI. POST /webhook/ingest"
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger-ingest",
+      "name": "Run Now (demo)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-700, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull the uploaded CSV file's text out of the binary payload, regardless of\n// which binary key the browser used. Falls back to a JSON body with csv_text\n// (handy for the manual/demo trigger or API clients).\nconst item = $input.first();\nlet csvText = null;\nlet filename = null;\n\nif (item.binary) {\n  const key = Object.keys(item.binary)[0];\n  if (key) {\n    const bin = item.binary[key];\n    filename = bin.fileName || null;\n    csvText = Buffer.from(bin.data, 'base64').toString('utf-8');\n  }\n}\n\nif (!csvText && item.json) {\n  if (item.json.csv_text) csvText = item.json.csv_text;\n  else if (item.json.body && item.json.body.csv_text) csvText = item.json.body.csv_text;\n}\n\nif (!csvText) {\n  throw new Error('No CSV file found. Upload a file field or send {\"csv_text\": \"...\"}.');\n}\n\nreturn [{ json: { csv_text: csvText, filename: filename } }];"
+      },
+      "id": "extract-csv",
+      "name": "Extract CSV Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crawler-helper:8000/ingest/parse",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"csv_text\": $json.csv_text, \"filename\": $json.filename } }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "parse-normalize",
+      "name": "Parse + Normalize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-260, 300],
+      "notes": "Stateless helper: validates rows, maps employment_status to {salaried, self_employed}, coerces numbers, assigns a batch_id. Returns valid rows + rejected sample."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ Number($json.valid_count) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "has-valid-rows",
+      "name": "Has Valid Rows?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-40, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: 'no valid rows', batch_id: $json.batch_id, missing_headers: $json.missing_headers, rejected_count: $json.rejected_count, rejected_sample: $json.rejected_sample }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-400",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-40, 520]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=WITH incoming AS (SELECT * FROM jsonb_to_recordset('{{ JSON.stringify($json.valid || []).replace(/'/g, \"''\") }}'::jsonb) AS x(user_id text, name text, email text, monthly_income numeric, credit_score int, employment_status text, age int, batch_id uuid)), up AS (INSERT INTO users (user_id, name, email, monthly_income, credit_score, employment_status, age, batch_id) SELECT i.user_id, i.name, i.email, i.monthly_income, i.credit_score, i.employment_status, i.age, i.batch_id FROM incoming i ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, monthly_income = EXCLUDED.monthly_income, credit_score = EXCLUDED.credit_score, employment_status = EXCLUDED.employment_status, age = EXCLUDED.age, batch_id = EXCLUDED.batch_id RETURNING (xmax = 0) AS inserted) SELECT (SELECT batch_id FROM incoming LIMIT 1) AS batch_id, count(*) FILTER (WHERE inserted) AS inserted, count(*) FILTER (WHERE NOT inserted) AS updated FROM up;",
+        "options": {}
+      },
+      "id": "bulk-insert-users",
+      "name": "Bulk Insert Users",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [200, 300],
+      "notes": "Attach 'Postgres - LoanDB' credential. Single set-based upsert of the whole batch; idempotent on user_id. n8n owns the DB write (helper stays stateless)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/match",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"batch_id\": $json.batch_id } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "trigger-workflow-b",
+      "name": "Trigger Workflow B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 300],
+      "onError": "continueRegularOutput",
+      "notes": "Fires the matching pipeline for the batch that was just stored. This is the event-driven handoff: ingestion -> matching."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'ok', batch_id: $('Bulk Insert Users').item.json.batch_id, inserted: $('Bulk Insert Users').item.json.inserted, updated: $('Bulk Insert Users').item.json.updated, valid_count: $('Parse + Normalize').item.json.valid_count, rejected_count: $('Parse + Normalize').item.json.rejected_count }) }}",
+        "options": {}
+      },
+      "id": "respond-200",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [640, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Upload": {
+      "main": [
+        [
+          {
+            "node": "Extract CSV Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Now (demo)": {
+      "main": [
+        [
+          {
+            "node": "Extract CSV Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract CSV Text": {
+      "main": [
+        [
+          {
+            "node": "Parse + Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + Normalize": {
+      "main": [
+        [
+          {
+            "node": "Has Valid Rows?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Valid Rows?": {
+      "main": [
+        [
+          {
+            "node": "Bulk Insert Users",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bulk Insert Users": {
+      "main": [
+        [
+          {
+            "node": "Trigger Workflow B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Workflow B": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionTimeout": 300
+  }
+}

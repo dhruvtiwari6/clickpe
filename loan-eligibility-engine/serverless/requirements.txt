@@ -1,0 +1,4 @@
+# Lambda runtime dependencies (installed into the package by
+# serverless-python-requirements). boto3 is provided by the Lambda runtime, so
+# it is intentionally NOT pinned here.
+psycopg[binary]==3.2.3

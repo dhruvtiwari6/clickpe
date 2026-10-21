@@ -10,7 +10,8 @@ from fastapi import FastAPI
 
 from . import match as MB
 from . import normalize as N
-from .models import LlmApplyReq, NormReq, ParseReq, RenderReq, RobotsReq, RulesReq
+from . import ingest as ING
+from .models import IngestReq, LlmApplyReq, NormReq, ParseReq, RenderReq, RobotsReq, RulesReq
 
 UA = os.getenv("USER_AGENT", "LoanDiscoveryBot/1.0")
 app = FastAPI(title="crawler-helper")
@@ -134,3 +135,12 @@ def match_apply(req: LlmApplyReq):
     if req.verdicts is None:
         return {"llm_matches": MB.conservative_fallback(req.ambiguous)}
     return {"llm_matches": MB.apply_llm_verdicts(req.ambiguous, req.verdicts)}
+
+
+# ---------- /ingest/parse ----------
+@app.post("/ingest/parse")
+def ingest_parse(req: IngestReq):
+    """Stateless CSV ingestion. n8n uploads the file, reads its text, and POSTs
+    it here; this returns clean `users` rows + a batch_id for n8n to bulk-insert,
+    plus a rejected sample for observability. No DB access happens here."""
+    return ING.parse_csv(req.csv_text, req.batch_id)
