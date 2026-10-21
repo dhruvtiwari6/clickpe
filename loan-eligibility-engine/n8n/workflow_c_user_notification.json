@@ -12,7 +12,10 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-760, 300],
+      "position": [
+        -760,
+        300
+      ],
       "webhookId": "webhook-notify",
       "notes": "Triggered by Workflow B after a batch finishes matching. POST /webhook/notify with {batch_id}."
     },
@@ -22,7 +25,10 @@
       "name": "Run Now (demo)",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [-760, 480]
+      "position": [
+        -760,
+        480
+      ]
     },
     {
       "parameters": {
@@ -31,7 +37,9 @@
             {
               "id": "demo-batch-c",
               "name": "body",
-              "value": { "batch_id": "00000000-0000-0000-0000-000000000001" },
+              "value": {
+                "batch_id": "00000000-0000-0000-0000-000000000001"
+              },
               "type": "object"
             }
           ]
@@ -42,18 +50,27 @@
       "name": "Set Demo Batch",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [-560, 480]
+      "position": [
+        -560,
+        480
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "version": 2 },
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
           "combinator": "and",
           "conditions": [
             {
               "leftValue": "={{ Boolean($json.body && $json.body.batch_id && String($json.body.batch_id).trim().length > 0) }}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "true" }
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
             }
           ]
         }
@@ -62,43 +79,63 @@
       "name": "Validate Input",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [-360, 300]
+      "position": [
+        -360,
+        300
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: 'invalid batch_id' }) }}",
-        "options": { "responseCode": 400 }
+        "options": {
+          "responseCode": 400
+        }
       },
       "id": "respond-400-c",
       "name": "Respond 400",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [-360, 500]
+      "position": [
+        -360,
+        500
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT u.user_id, u.name, u.email, count(*) AS product_count, jsonb_agg(jsonb_build_object('product_name', lp.product_name, 'lender_name', lp.lender_name, 'interest_rate_min', lp.interest_rate_min, 'interest_rate_max', lp.interest_rate_max, 'min_loan_amount', lp.min_loan_amount, 'max_loan_amount', lp.max_loan_amount, 'source_url', lp.source_url, 'score', m.score) ORDER BY m.score DESC NULLS LAST) AS products FROM matches m JOIN users u ON u.user_id = m.user_id JOIN loan_products lp ON lp.product_id = m.product_id WHERE m.batch_id = $1::uuid AND m.notified = FALSE AND m.is_active GROUP BY u.user_id, u.name, u.email ORDER BY u.user_id;",
-        "options": { "queryReplacement": "={{ $('Validate Input').item.json.body.batch_id }}" }
+        "options": {
+          "queryReplacement": "={{ $('Validate Input').item.json.body.batch_id }}"
+        }
       },
       "id": "fetch-matches",
       "name": "Fetch Matches Per User",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [-140, 300],
+      "position": [
+        -140,
+        300
+      ],
       "notes": "Attach 'Postgres - LoanDB' credential. One row per user with their matched products aggregated as JSON, newest/highest-score first. Only unnotified, active matches for this batch."
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "version": 2 },
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
           "combinator": "and",
           "conditions": [
             {
               "leftValue": "={{ $json.user_id }}",
               "rightValue": "",
-              "operator": { "type": "string", "operation": "exists", "singleValue": true }
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
             }
           ]
         }
@@ -107,18 +144,24 @@
       "name": "Has Recipients?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [80, 300],
+      "position": [
+        80,
+        300
+      ],
       "notes": "If Fetch returned no rows there is nothing to send -> Respond 200 (empty)."
     },
     {
       "parameters": {
-        "jsCode": "// Build one personalized email per user.\n//\n// DEMO SAFETY (assignment requirement): never email the real sample-CSV\n// addresses. Every message is redirected to a safe TEST inbox. Set the n8n env\n// var DEMO_INBOX (e.g. 'abcd+loan@gmail.com'); we also tag the alias with the\n// user_id so you can see which user each mail was for. Set DEMO_REDIRECT=off to\n// send to the real address (do NOT do this with the sample data).\nconst items = $input.all();\nconst redirect = ($env.DEMO_REDIRECT || 'on').toLowerCase() !== 'off';\nconst demoInbox = $env.DEMO_INBOX || 'abcd+loan@gmail.com';\nconst sender = $env.SES_SENDER || 'loan-engine@example.com';\n\nfunction aliasFor(userId) {\n  // abcd+loan@gmail.com -> abcd+loan-<userId>@gmail.com (gmail +aliasing)\n  const at = demoInbox.indexOf('@');\n  if (at < 0) return demoInbox;\n  const local = demoInbox.slice(0, at);\n  const domain = demoInbox.slice(at);\n  const safeId = String(userId).replace(/[^A-Za-z0-9]/g, '').slice(0, 12);\n  return (local.includes('+') ? `${local}-${safeId}` : `${local}+${safeId}`) + domain;\n}\n\nfunction fmtRate(p) {\n  if (p.interest_rate_min == null && p.interest_rate_max == null) return '';\n  if (p.interest_rate_max == null) return ` — from ${p.interest_rate_min}% p.a.`;\n  return ` — ${p.interest_rate_min}%–${p.interest_rate_max}% p.a.`;\n}\n\nconst out = [];\nfor (const it of items) {\n  const u = it.json;\n  const products = Array.isArray(u.products) ? u.products : [];\n  if (products.length === 0) continue;\n\n  const lines = products.map(p => {\n    const lender = p.lender_name ? `${p.lender_name} — ` : '';\n    return `• ${lender}${p.product_name}${fmtRate(p)}`;\n  });\n\n  const greeting = u.name ? `Hi ${u.name},` : 'Hello,';\n  const textBody = `${greeting}\\n\\n` +\n    `Good news — based on your profile you may qualify for ${products.length} personal loan product(s):\\n\\n` +\n    lines.join('\\n') +\n    `\\n\\nThese are indicative matches, not an offer or approval. Terms are set by each lender.\\n\\n— The Loan Eligibility Engine`;\n\n  const htmlItems = products.map(p => {\n    const lender = p.lender_name ? `<strong>${p.lender_name}</strong> — ` : '';\n    return `<li>${lender}${p.product_name}${fmtRate(p)}</li>`;\n  }).join('');\n  const htmlBody = `<p>${greeting}</p>` +\n    `<p>Good news — based on your profile you may qualify for <strong>${products.length}</strong> personal loan product(s):</p>` +\n    `<ul>${htmlItems}</ul>` +\n    `<p style=\"color:#666;font-size:12px\">These are indicative matches, not an offer or approval. Terms are set by each lender.</p>` +\n    `<p>— The Loan Eligibility Engine</p>`;\n\n  const toAddress = redirect ? aliasFor(u.user_id) : u.email;\n\n  out.push({ json: {\n    user_id: u.user_id,\n    original_email: u.email,\n    to: toAddress,\n    from: sender,\n    subject: `You have ${products.length} personal loan match${products.length === 1 ? '' : 'es'}`,\n    text: textBody,\n    html: htmlBody,\n    product_count: products.length,\n    redirected: redirect\n  }});\n}\nreturn out;"
+        "jsCode": "// Build one personalized email per user.\n//\n// DEMO SAFETY (assignment requirement): never email the real sample-CSV\n// addresses. Every message is redirected to a safe TEST inbox. Set the n8n env\n// var DEMO_INBOX (e.g. 'abcd+loan@gmail.com'); we also tag the alias with the\n// user_id so you can see which user each mail was for. Set DEMO_REDIRECT=off to\n// send to the real address (do NOT do this with the sample data).\nconst items = $input.all();\nconst redirect = ($env.DEMO_REDIRECT || 'on').toLowerCase() !== 'off';\nconst demoInbox = $env.DEMO_INBOX || 'abcd+loan@gmail.com';\nconst sender = $env.SES_SENDER || 'loan-engine@example.com';\n\nfunction aliasFor(userId) {\n  // abcd+loan@gmail.com -> abcd+loan-<userId>@gmail.com (gmail +aliasing)\n  const at = demoInbox.indexOf('@');\n  if (at < 0) return demoInbox;\n  const local = demoInbox.slice(0, at);\n  const domain = demoInbox.slice(at);\n  const safeId = String(userId).replace(/[^A-Za-z0-9]/g, '').slice(0, 12);\n  return (local.includes('+') ? `${local}-${safeId}` : `${local}+${safeId}`) + domain;\n}\n\nfunction fmtRate(p) {\n  if (p.interest_rate_min == null && p.interest_rate_max == null) return '';\n  if (p.interest_rate_max == null) return ` \u2014 from ${p.interest_rate_min}% p.a.`;\n  return ` \u2014 ${p.interest_rate_min}%\u2013${p.interest_rate_max}% p.a.`;\n}\n\nconst out = [];\nfor (let idx = 0; idx < items.length; idx++) {\n  const it = items[idx];\n  const u = it.json;\n  const products = Array.isArray(u.products) ? u.products : [];\n  if (products.length === 0) continue;\n\n  const lines = products.map(p => {\n    const lender = p.lender_name ? `${p.lender_name} \u2014 ` : '';\n    return `\u2022 ${lender}${p.product_name}${fmtRate(p)}`;\n  });\n\n  const greeting = u.name ? `Hi ${u.name},` : 'Hello,';\n  const textBody = `${greeting}\\n\\n` +\n    `Good news \u2014 based on your profile you may qualify for ${products.length} personal loan product(s):\\n\\n` +\n    lines.join('\\n') +\n    `\\n\\nThese are indicative matches, not an offer or approval. Terms are set by each lender.\\n\\n\u2014 The Loan Eligibility Engine`;\n\n  const htmlItems = products.map(p => {\n    const lender = p.lender_name ? `<strong>${p.lender_name}</strong> \u2014 ` : '';\n    return `<li>${lender}${p.product_name}${fmtRate(p)}</li>`;\n  }).join('');\n  const htmlBody = `<p>${greeting}</p>` +\n    `<p>Good news \u2014 based on your profile you may qualify for <strong>${products.length}</strong> personal loan product(s):</p>` +\n    `<ul>${htmlItems}</ul>` +\n    `<p style=\"color:#666;font-size:12px\">These are indicative matches, not an offer or approval. Terms are set by each lender.</p>` +\n    `<p>\u2014 The Loan Eligibility Engine</p>`;\n\n  const toAddress = redirect ? aliasFor(u.user_id) : u.email;\n\n  out.push({ json: {\n    user_id: u.user_id,\n    original_email: u.email,\n    to: toAddress,\n    from: sender,\n    subject: `You have ${products.length} personal loan match${products.length === 1 ? '' : 'es'}`,\n    text: textBody,\n    html: htmlBody,\n    product_count: products.length,\n    redirected: redirect\n  }, pairedItem: { item: idx } });\n}\nreturn out;"
       },
       "id": "build-emails",
       "name": "Build Emails",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [300, 200]
+      "position": [
+        300,
+        200
+      ]
     },
     {
       "parameters": {
@@ -135,53 +178,162 @@
       "name": "Send via SES",
       "type": "n8n-nodes-base.awsSes",
       "typeVersion": 1,
-      "position": [520, 200],
+      "position": [
+        520,
+        200
+      ],
       "onError": "continueRegularOutput",
-      "notes": "Attach an 'AWS' credential (access key with ses:SendEmail). The sender/recipient must be verified while the SES account is in sandbox. On error, continues so one bad address doesn't block the batch; failed sends are NOT marked notified below only if you gate on success — see note."
+      "notes": "Attach an 'AWS' credential (access key with ses:SendEmail). The sender/recipient must be verified while the SES account is in sandbox. On error, continues so one bad address doesn't block the batch; failed sends are NOT marked notified below only if you gate on success \u2014 see note."
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE matches SET notified = TRUE, updated_at = now() WHERE batch_id = $1::uuid AND user_id = $2 AND notified = FALSE AND is_active RETURNING match_id;",
-        "options": { "queryReplacement": "={{ $('Validate Input').item.json.body.batch_id }},{{ $('Build Emails').item.json.user_id }}" }
+        "query": "=UPDATE matches SET notified = TRUE, updated_at = now() WHERE batch_id = '{{ $('Validate Input').first().json.body.batch_id }}'::uuid AND user_id = '{{ $('Build Emails').item.json.user_id }}' AND notified = FALSE AND is_active RETURNING match_id;",
+        "options": {}
       },
       "id": "mark-notified",
       "name": "Mark Notified",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [740, 200],
+      "position": [
+        740,
+        200
+      ],
       "notes": "Attach 'Postgres - LoanDB' credential. Flips notified=true per user so re-runs never double-email. Keyed on (batch_id, user_id)."
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ status: 'ok', batch_id: $('Validate Input').item.json.body.batch_id, emails_sent: $('Build Emails').all().length }) }}",
+        "responseBody": "={{ JSON.stringify({ status: 'ok', batch_id: $('Validate Input').first().json.body.batch_id, emails_sent: $('Build Emails').all().length }) }}",
         "options": {}
       },
       "id": "respond-200-c",
       "name": "Respond 200",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [740, 420]
+      "position": [
+        740,
+        420
+      ]
     }
   ],
   "connections": {
-    "Webhook": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
-    "Run Now (demo)": { "main": [[{ "node": "Set Demo Batch", "type": "main", "index": 0 }]] },
-    "Set Demo Batch": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
-    "Validate Input": { "main": [
-      [{ "node": "Fetch Matches Per User", "type": "main", "index": 0 }],
-      [{ "node": "Respond 400", "type": "main", "index": 0 }]
-    ] },
-    "Fetch Matches Per User": { "main": [[{ "node": "Has Recipients?", "type": "main", "index": 0 }]] },
-    "Has Recipients?": { "main": [
-      [{ "node": "Build Emails", "type": "main", "index": 0 }],
-      [{ "node": "Respond 200", "type": "main", "index": 0 }]
-    ] },
-    "Build Emails": { "main": [[{ "node": "Send via SES", "type": "main", "index": 0 }]] },
-    "Send via SES": { "main": [[{ "node": "Mark Notified", "type": "main", "index": 0 }]] },
-    "Mark Notified": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Now (demo)": {
+      "main": [
+        [
+          {
+            "node": "Set Demo Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Demo Batch": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Matches Per User",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Matches Per User": {
+      "main": [
+        [
+          {
+            "node": "Has Recipients?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Recipients?": {
+      "main": [
+        [
+          {
+            "node": "Build Emails",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Emails": {
+      "main": [
+        [
+          {
+            "node": "Send via SES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via SES": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Notified": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionTimeout": 300 },
+  "settings": {
+    "executionTimeout": 300
+  },
   "pinData": {}
 }
