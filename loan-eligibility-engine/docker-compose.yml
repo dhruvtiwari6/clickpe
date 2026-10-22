@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${PG_PASSWORD:-loanpass}
       POSTGRES_DB: ${PG_DB:-loanengine}
     ports:
-      - "5433 curl -s http://localhost:8000/health   :5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db:/docker-entrypoint-initdb.d:ro       # runs *.sql on first boot, in filename order
